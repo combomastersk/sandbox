@@ -8,13 +8,20 @@ export default class Player {
         this.position = new THREE.Vector3(0, 0, 0);
         this.velocity = new THREE.Vector3();
         this.speed = 5; // Reduced speed for realistic movement
+        
+        // Jump / Physics params
+        this.velocityY = 0;
+        this.gravity = -20;
+        this.jumpForce = 8;
+        this.isJumping = false;
 
         // Input state
         this.keys = {
             forward: false,
             backward: false,
             left: false,
-            right: false
+            right: false,
+            space: false
         };
 
         this.mixer = null;
@@ -58,7 +65,8 @@ export default class Player {
     loadAnimations(loader) {
         const animsToLoad = {
             idle: '/models/mc_standing_idle.fbx',
-            walk: '/models/mc_walking.fbx'
+            walk: '/models/mc_walking.fbx',
+            jump: '/models/mc_standing_jump.fbx'
         };
 
         let loadedCount = 0;
@@ -105,6 +113,7 @@ export default class Player {
             case 'KeyS': this.keys.backward = true; break;
             case 'KeyA': this.keys.left = true; break;
             case 'KeyD': this.keys.right = true; break;
+            case 'Space': this.keys.space = true; break;
         }
     }
 
@@ -114,6 +123,7 @@ export default class Player {
             case 'KeyS': this.keys.backward = false; break;
             case 'KeyA': this.keys.left = false; break;
             case 'KeyD': this.keys.right = false; break;
+            case 'Space': this.keys.space = false; break;
         }
     }
 
@@ -122,6 +132,27 @@ export default class Player {
 
         // Update Animation
         if (this.mixer) this.mixer.update(deltaTime);
+
+        // Handle Jump Input
+        if (this.keys.space && !this.isJumping) {
+            this.velocityY = this.jumpForce;
+            this.isJumping = true;
+        }
+
+        // Apply Gravity
+        this.velocityY += this.gravity * deltaTime;
+        this.position.y += this.velocityY * deltaTime;
+
+        // Ground Collision
+        if (this.position.y <= 0) {
+            this.position.y = 0;
+            this.velocityY = 0;
+            this.isJumping = false;
+        }
+
+        // Update mesh vertical position
+        this.mesh.position.y = this.position.y;
+
 
         // Movement Input Vector
         const inputVector = new THREE.Vector3(0, 0, 0);
@@ -161,8 +192,10 @@ export default class Player {
 
             // Move player
             const moveStep = moveDirection.multiplyScalar(this.speed * deltaTime);
-            this.position.add(moveStep);
-            this.mesh.position.copy(this.position);
+            this.position.x += moveStep.x;
+            this.position.z += moveStep.z;
+            this.mesh.position.x = this.position.x;
+            this.mesh.position.z = this.position.z;
 
             // Rotate mesh to face movement direction
             const targetRotation = Math.atan2(moveDirection.x, moveDirection.z);
@@ -171,7 +204,12 @@ export default class Player {
             const q = new THREE.Quaternion();
             q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetRotation);
             this.mesh.quaternion.slerp(q, 10 * deltaTime);
+        }
 
+        // Animation State Logic
+        if (this.isJumping) {
+            this.playAnimation('jump');
+        } else if (inputVector.length() > 0) {
             this.playAnimation('walk');
         } else {
             this.playAnimation('idle');

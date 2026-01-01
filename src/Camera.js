@@ -13,6 +13,9 @@ export default class CameraController {
         this.theta = 0;    // Horizontal angle (Yaw)
         this.phi = 0;      // Vertical angle (Pitch)
 
+        // Shoulder Mode State
+        this.isShoulderMode = false;
+
         // Limits
         this.minPhi = -Math.PI / 4; // Look down limit
         this.maxPhi = Math.PI / 3;  // Look up limit
@@ -36,48 +39,41 @@ export default class CameraController {
                 this.phi = Math.max(this.minPhi, Math.min(this.maxPhi, this.phi));
             }
         });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyV') {
+                this.isShoulderMode = !this.isShoulderMode;
+            }
+        });
     }
 
     calculateIdealOffset() {
-        // Calculate offset based on spherical coordinates
-        const x = this.radius * Math.sin(this.theta) * Math.cos(this.phi);
-        let y = this.radius * Math.sin(this.phi) + 1.5; // Base height relative to player
-        const z = this.radius * Math.cos(this.theta) * Math.cos(this.phi);
+        // Defines camera position relative to target
 
-        // Clamp Y to prevent clipping into ground
-        // We know player is at approx Y=0 (or position.y)
-        // Let's assume ground is at Y=0.
-        // We want absolute camera Y to be > 0.1
-        // Absolute Y = player.pos.y + offset.y
-        // But here we return offset relative to player? No, previous code added to target pos.
-        // Let's check previous implementation:
-        // offset.add(this.target.mesh.position);
+        // Parameters based on mode
+        const currentRadius = this.isShoulderMode ? 1.5 : 3.0;
+        // In shoulder mode, we also want to shift the camera to the right relative to the view
+        const sideOffset = this.isShoulderMode ? 0.8 : 0.0;
+        const heightOffset = this.isShoulderMode ? 1.5 : 1.5; // Slightly higher in shoulder mode? keep same for now
 
-        // So we calculate local offset (x,y,z), then add target position.
+        // 1. Calculate base spherical position (behind player)
+        const x = currentRadius * Math.sin(this.theta) * Math.cos(this.phi);
+        const y = currentRadius * Math.sin(this.phi) + heightOffset;
+        const z = currentRadius * Math.cos(this.theta) * Math.cos(this.phi);
 
-        // Let's check the Y clamp logic relative to ground.
-        // Ideally we check after adding to target position, but we can try to constrain the local y part.
-        // Actually, simpler to just ensure the phi angle doesn't let it go below ground.
-
-        // Or explicit clamp:
         const offset = new THREE.Vector3(x, y, z);
-        const finalPos = offset.clone().add(this.target.mesh.position);
 
-        if (finalPos.y < 0.5) {
-            finalPos.y = 0.5;
-            // We can't just modify finalPos and return offset.
-            // We need to return the object that update() uses.
-            // But update() calls this and then lerps to it.
-            // So if we return the absolute position instead of offset, we need to change update().
-            // Wait, calculateIdealOffset returns "offset" which is a Vector3.
-            // In previous code: 
-            // offset.add(this.target.mesh.position);
-            // return offset; 
-            // So it returns the TARGET POSITION (World Space), not just the offset vector.
-            // The name "calculateIdealOffset" is slightly misleading, it calculates "IdealPosition".
+        // 2. Apply Side Offset (Right vector relative to camera yaw)
+        // Camera forward (on XZ plane) = (sin(theta), 0, cos(theta))
+        // Camera right = (cos(theta), 0, -sin(theta))
+        if (sideOffset !== 0) {
+            const rightX = Math.cos(this.theta);
+            const rightZ = -Math.sin(this.theta);
+
+            offset.x += rightX * sideOffset;
+            offset.z += rightZ * sideOffset;
         }
 
-        // Correct implementation:
         offset.add(this.target.mesh.position);
 
         // Clamp height
@@ -90,7 +86,23 @@ export default class CameraController {
 
     calculateIdealLookat() {
         // Look at the player (slightly up at head/chest level)
+        // In shoulder mode, we might want to look slightly to the side of the player (forward), 
+        // effectively centering the crosshair, rather than looking AT the player.
+        // For now, let's keep looking at the player but maybe adjust offset if needed.
+
         const lookAtPos = new THREE.Vector3(0, 1.5, 0);
+
+        // Optional: Shift lookAt target so player isn't dead center in shoulder mode
+        if (this.isShoulderMode) {
+            // If we look at player, and camera is to the right, player is on left.
+            // If we want player more to the left, we look at a point to the RIGHT of the player.
+            const sideLookOffset = 0.8;
+            const rightX = Math.cos(this.theta);
+            const rightZ = -Math.sin(this.theta);
+            lookAtPos.x += rightX * sideLookOffset;
+            lookAtPos.z += rightZ * sideLookOffset;
+        }
+
         lookAtPos.add(this.target.mesh.position);
         return lookAtPos;
     }
@@ -106,7 +118,16 @@ export default class CameraController {
         const idealLookat = this.calculateIdealLookat();
 
         // Use a faster lerp for responsiveness, or direct copy
-        const t = 1.0 - Math.pow(0.0001, timeElapsed);
+        // For seamless transition, we rely on this lerp.
+        // t = 1.0 - Math.pow(0.001, timeElapsed) -> very fast
+        // Let's use a fixed alpha for frame-rate independenceish or standard delta lerp
+        // Frame independent damping:
+        // current = lerp(current, target, 1 - exp(-decay * dt))
+        // decay = 10 (fast), 5 (smooth).
+        // Let's use a standard smooth decay.
+
+        const decay = 10.0;
+        const t = 1.0 - Math.exp(-decay * timeElapsed);
 
         this.currentPosition.lerp(idealOffset, t);
         this.currentLookat.lerp(idealLookat, t);
